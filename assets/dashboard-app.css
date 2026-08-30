@@ -1,4 +1,4 @@
-:root {
+    :root {
         --bg: #f8fafc;
         --text: #0f172a;
         --text-secondary: #64748b;
@@ -14,6 +14,14 @@
         --success: #16a34a;
         --warning: #d97706;
         --danger: #dc2626;
+        /* Inverted "selected" chips (filter pills, jump-nav links). These
+           are deliberately the SAME fixed accent colors in both themes —
+           lime fill + near-black text, matching .btn-primary. An earlier
+           version derived them from var(--text)/var(--card), which flips
+           per theme and produced white-on-white pills in dark mode. */
+        --chip-active-bg: #84cc16;
+        --chip-active-fg: #052e16;
+        --chip-active-badge: rgba(5,46,22,0.16);
     }
     /* Toggled via [data-theme="dark"] on <html> — see the theme switcher in
        the sidebar. The sidebar itself stays the same dark navy in both
@@ -33,6 +41,9 @@
         --success: #4ade80;
         --warning: #fbbf24;
         --danger: #f87171;
+        /* --chip-active-* intentionally NOT overridden here: the selected
+           chip keeps its fixed lime/dark-green pairing in dark mode too.
+           See the note in :root above. */
     }
     * { box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; }
@@ -168,7 +179,7 @@
         align-items: center;
         margin-bottom: 2rem;
         padding-bottom: 1rem;
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid var(--border);
         flex-wrap: wrap;
         gap: 0.5rem;
         position: sticky;
@@ -253,7 +264,7 @@
     .election-group-header .dot.scheduled { background: #6366f1; }
     .election-group-header .dot.closed { background: #ef4444; }
     .election-group-header .label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
-    .election-group-header .count { background: #f1f5f9; color: var(--text-secondary); padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+    .election-group-header .count { background: var(--card-2); border: 1px solid var(--border); color: var(--text-secondary); padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
     .election-group-header::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
     /* Status filter pills — click "Ongoing" and see only ongoing
@@ -266,9 +277,10 @@
     }
     .election-filter-bar button:hover { border-color: #94a3b8; }
     .election-filter-bar button .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .election-filter-bar button.selected { background: var(--text); color: #fff; border-color: var(--text); }
+    .election-filter-bar button.selected { background: var(--chip-active-bg); color: var(--chip-active-fg); border-color: var(--chip-active-bg); }
     .election-filter-bar button .fbadge { background: rgba(15,23,42,0.06); padding: 0.05rem 0.4rem; border-radius: 999px; font-size: 0.7rem; }
-    .election-filter-bar button.selected .fbadge { background: rgba(255,255,255,0.2); }
+    [data-theme="dark"] .election-filter-bar button .fbadge { background: rgba(255,255,255,0.1); }
+    .election-filter-bar button.selected .fbadge { background: var(--chip-active-badge); }
 
     .ec-header { display: flex; align-items: flex-start; gap: 0.9rem; position: relative; }
     .ec-icon {
@@ -347,7 +359,8 @@
         position: relative;
     }
     .ec-status-neutral {
-        background: #f8fafc; color: var(--text-secondary);
+        background: var(--card-2); color: var(--text-secondary);
+        border: 1px solid var(--border);
         border-radius: 12px; padding: 0.8rem 1.1rem; font-size: 0.85rem;
         position: relative;
     }
@@ -402,7 +415,12 @@
 
     .btn-primary {
         background: #84cc16;
-        color: #ffffff;
+        /* Near-black green label on lime, same as the landing page's CTA
+           buttons — white on this lime only reaches ~1.9:1 contrast.
+           Kept IDENTICAL in both themes on purpose: a theme-dependent
+           flip here is exactly how the old "white button, white text"
+           bug happened. */
+        color: #052e16;
         border-color: #84cc16;
     }
     .btn-primary:hover { background: #65a30d; border-color: #65a30d; }
@@ -411,7 +429,7 @@
         cursor: not-allowed;
         background: #84cc16;
         border-color: #84cc16;
-        color: #ffffff;
+        color: #052e16;
     }
 
     .btn-secondary {
@@ -607,7 +625,7 @@
         transition:.15s;white-space:nowrap;
     }
     .cand-jump-link:hover{border-color:var(--accent);}
-    .cand-jump-link.active{background:var(--text);color:var(--card);border-color:var(--text);}
+    .cand-jump-link.active{background:var(--chip-active-bg);color:var(--chip-active-fg);border-color:var(--chip-active-bg);}
 
     .cand-no-results{text-align:center;color:var(--text-secondary);padding:3rem 1rem;font-size:.92rem;}
 
@@ -927,14 +945,14 @@
     .ballot-progress-stepper { display: flex; align-items: center; overflow-x: auto; padding: 2px 0; scrollbar-width: thin; }
     .bps-dot {
         width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0;
-        background: #e2e8f0; border: 2px solid #e2e8f0; box-sizing: border-box;
+        background: var(--border); border: 2px solid var(--border); box-sizing: border-box;
         display: flex; align-items: center; justify-content: center;
         transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
     }
     .bps-dot.filled { background: #65a30d; border-color: #65a30d; }
-    .bps-dot-num { font-size: 8px; font-weight: 800; color: #94a3b8; line-height: 1; }
+    .bps-dot-num { font-size: 8px; font-weight: 800; color: var(--text-secondary); line-height: 1; }
     .bps-dot.filled .bps-dot-num { color: #fff; }
-    .bps-line { flex: 1 0 16px; min-width: 16px; height: 4px; background: #e2e8f0; border-radius: 2px; overflow: hidden; margin: 0 -1px; }
+    .bps-line { flex: 1 0 16px; min-width: 16px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 0 -1px; }
     .bps-line-fill { height: 100%; background: linear-gradient(90deg, #84cc16, #65a30d); border-radius: 2px; transition: width 0.35s ease; }
     .bps-labels { display: flex; justify-content: space-between; margin-top: 0.4rem; }
     .bps-labels span { font-size: 0.7rem; color: var(--text-secondary); font-weight: 600; }
@@ -1050,6 +1068,10 @@
         animation: btnSpin 0.7s linear infinite; flex-shrink: 0; margin-right: 0.15rem;
     }
     .btn-spinner.dark { border-color: rgba(15,23,42,0.25); border-top-color: var(--text); }
+    /* A spinner inside a lime primary button must match the button's dark
+       label (see .btn-primary) or it disappears — the default white ring
+       is invisible on that background in BOTH themes now. */
+    .btn-primary .btn-spinner { border-color: rgba(5,46,22,0.3); border-top-color: #052e16; }
     @keyframes btnSpin { to { transform: rotate(360deg); } }
 
     /* Shimmering skeleton block — same visual language as the admin
@@ -1074,7 +1096,29 @@
     [data-theme="dark"] .ballot-candidate-party { color: #4ade80; }
     [data-theme="dark"] .ballot-summary-party { color: #4ade80; }
     [data-theme="dark"] .candidate-card .party { color: #4ade80; }
-    [data-theme="dark"] .btn-primary { color: #052e16; }
+
+    /* ---- Dark-mode overrides for pastel tints that hardcode a dark
+       saturated text color tuned for a WHITE card — on a dark card those
+       go muddy or invisible, so each gets a lighter-text equivalent. ---- */
+    [data-theme="dark"] .ballot-step-eyebrow { color: #a3e635; background: rgba(132,204,22,0.18); }
+    [data-theme="dark"] .ballot-select-count { color: #a3e635; }
+    [data-theme="dark"] .ballot-summary-name.none { color: #f87171; }
+    [data-theme="dark"] .ballot-warning {
+        background: rgba(245,158,11,0.12);
+        color: #fbbf24;
+        border-color: rgba(251,191,36,0.3);
+    }
+    [data-theme="dark"] .ballot-exit { color: #f87171; }
+
+    /* Toast + confirm-modal icon chips follow the same pastel-on-white
+       pattern; brighten the glyph colors in dark mode (mirrors the admin
+       panel's overrides). */
+    [data-theme="dark"] .toast.success .toast-icon { background: rgba(34,197,94,0.18); color: #4ade80; }
+    [data-theme="dark"] .toast.error .toast-icon { background: rgba(239,68,68,0.18); color: #f87171; }
+    [data-theme="dark"] .toast.info .toast-icon { background: rgba(59,130,246,0.18); color: #60a5fa; }
+    [data-theme="dark"] .toast.warning .toast-icon { background: rgba(245,158,11,0.18); color: #fbbf24; }
+    [data-theme="dark"] .modal-box .modal-icon.danger { background: rgba(239,68,68,0.16); color: #f87171; }
+    [data-theme="dark"] .modal-box .modal-icon.neutral { background: rgba(59,130,246,0.16); color: #60a5fa; }
 
     /* ================= SPA PANEL SWITCHING ================= */
     /* This was the actual bug: showPanel() in dashboard.php correctly
