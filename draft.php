@@ -32,6 +32,27 @@ $pdo = getDbConnection();
 $userId = (int) $_SESSION['user_id'];
 $method = $_SERVER['REQUEST_METHOD'];
 
+// Parse the JSON body ONCE — php://input isn't rewindable, so both the
+// CSRF check below and the POST handler share this single decode.
+$input = [];
+if ($method === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        jsonResponse(['success' => false, 'message' => 'Invalid request body.'], 400);
+    }
+    if (!verifyCsrfToken($input['csrf_token'] ?? null)) {
+        jsonResponse(['success' => false, 'message' => 'Your session expired. Please refresh and try again.'], 403);
+    }
+    // Per-user rate limit on the write path. Draft autosaves can
+    // legitimately fire often while a student fills in a ballot, so the
+    // cap is generous — this only stops a runaway script from hammering
+    // the table.
+    if (isRateLimitedKey($pdo, 'draft_save:user:' . $userId, 60, 60)) {
+        jsonResponse(['success' => false, 'message' => 'Too many requests. Please slow down.'], 429);
+    }
+    recordAttemptKey($pdo, 'draft_save:user:' . $userId);
+}
+
 // Only ever touch drafts for elections the student can actually see (same
 // visibility rule as the dashboard: SSG is open to everyone, DSG is scoped
 // to one department), so this endpoint can't be used to poke at drafts
@@ -69,14 +90,8 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    if (!is_array($input)) {
-        jsonResponse(['success' => false, 'message' => 'Invalid request body.'], 400);
-    }
-    if (!verifyCsrfToken($input['csrf_token'] ?? null)) {
-        jsonResponse(['success' => false, 'message' => 'Your session expired. Please refresh and try again.'], 403);
-    }
-
+    // Body already decoded and CSRF-checked at the top of the file —
+    // php://input can only be read once per request.
     $electionId = (int) ($input['election_id'] ?? 0);
     if ($electionId <= 0) {
         jsonResponse(['success' => false, 'message' => 'Missing election.'], 400);
@@ -108,18 +123,34 @@ if ($method === 'POST') {
         }
     }
 
-    $stmt = $pdo->prepare('
-        INSERT INTO vote_drafts (user_id, election_id, selections, updated_at)
-        VALUES (:uid, :eid, :selections::jsonb, NOW())
-        ON CONFLICT (user_id, election_id)
-        DO UPDATE SET selections = :selections2::jsonb, updated_at = NOW()
-    ');
-    $stmt->execute([
-        'uid' => $userId,
-        'eid' => $electionId,
-        'selections' => json_encode($clean),
-        'selections2' => json_encode($clean),
-    ]);
+    if (isMysql()) {
+        $stmt = $pdo->prepare('
+            INSERT INTO vote_drafts (user_id, election_id, selections, updated_at)
+            VALUES (:uid, :eid, :selections, NOW())
+            ON DUPLICATE KEY UPDATE
+                selections = VALUES(selections),
+                updated_at = NOW()
+        ');
+        $params = [
+            'uid' => $userId,
+            'eid' => $electionId,
+            'selections' => json_encode($clean),
+        ];
+    } else {
+        $stmt = $pdo->prepare('
+            INSERT INTO vote_drafts (user_id, election_id, selections, updated_at)
+            VALUES (:uid, :eid, :selections::jsonb, NOW())
+            ON CONFLICT (user_id, election_id)
+            DO UPDATE SET selections = :selections2::jsonb, updated_at = NOW()
+        ');
+        $params = [
+            'uid' => $userId,
+            'eid' => $electionId,
+            'selections' => json_encode($clean),
+            'selections2' => json_encode($clean),
+        ];
+    }
+    $stmt->execute($params);
 
     jsonResponse(['success' => true]);
 }
