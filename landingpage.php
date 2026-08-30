@@ -8,37 +8,51 @@ $pdo = getDbConnection();
 syncElectionStatuses($pdo);
 $isLoggedIn = !empty($_SESSION['user_id']);
 
-// Election logos — SSG's site-wide logo, and each department's DSG logo.
-// electionLogoHtml() (includes/functions.php) falls back to a generic
-// placeholder glyph if a given type/department has no logo uploaded yet.
-$ssgLogo = getSiteSetting($pdo, 'ssg_logo');
-$departmentLogos = getDepartmentLogos($pdo);
+// Everything below is public-page data. A DB hiccup here shouldn't take
+// the whole homepage down (the global exception handler would show a
+// generic 500) — instead the page renders with empty state blocks and
+// zeroed stats, and the real error goes to the server log.
+$ssgLogo = null;
+$departmentLogos = [];
+$elections = [];
+$candidates = [];
+$totalStudents = 0;
+$totalVoters = 0;
+try {
+    // Election logos — SSG's site-wide logo, and each department's DSG logo.
+    // electionLogoHtml() (includes/functions.php) falls back to a generic
+    // placeholder glyph if a given type/department has no logo uploaded yet.
+    $ssgLogo = getSiteSetting($pdo, 'ssg_logo');
+    $departmentLogos = getDepartmentLogos($pdo);
 
-// Current elections (non-draft)
-$elections = $pdo->query("
-    SELECT name, type, department, status, start_date, end_date
-    FROM elections
-    WHERE status != 'draft'
-    ORDER BY start_date ASC
-")->fetchAll();
+    // Current elections (non-draft)
+    $elections = $pdo->query("
+        SELECT name, type, department, status, start_date, end_date
+        FROM elections
+        WHERE status != 'draft'
+        ORDER BY start_date ASC
+    ")->fetchAll();
 
-// Candidates for the marquee (limit to 16)
-$candStmt = $pdo->prepare('
-    SELECT c.id, c.name, c.photo, p.title AS position_title, e.name AS election_name
-    FROM candidates c
-    JOIN positions p ON p.id = c.position_id
-    JOIN election_positions ep ON ep.position_id = p.id
-    JOIN elections e ON e.id = ep.election_id
-    WHERE e.status != \'draft\'
-    ORDER BY RANDOM()
-    LIMIT 16
-');
-$candStmt->execute();
-$candidates = $candStmt->fetchAll();
+    // Candidates for the marquee (limit to 16)
+    $candStmt = $pdo->prepare('
+        SELECT c.id, c.name, c.photo, p.title AS position_title, e.name AS election_name
+        FROM candidates c
+        JOIN positions p ON p.id = c.position_id
+        JOIN election_positions ep ON ep.position_id = p.id
+        JOIN elections e ON e.id = ep.election_id
+        WHERE e.status != \'draft\'
+        ORDER BY ' . (isMysql() ? 'RAND()' : 'RANDOM()') . '
+        LIMIT 16
+    ');
+    $candStmt->execute();
+    $candidates = $candStmt->fetchAll();
 
-// Ticker stats — real numbers, not placeholders
-$totalStudents = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
-$totalVoters   = (int) $pdo->query('SELECT COUNT(DISTINCT user_id) FROM votes')->fetchColumn();
+    // Ticker stats — real numbers, not placeholders
+    $totalStudents = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $totalVoters   = (int) $pdo->query('SELECT COUNT(DISTINCT user_id) FROM votes')->fetchColumn();
+} catch (Throwable $e) {
+    error_log('Landing page data load failed: ' . $e->getMessage());
+}
 $liveCount = 0;
 foreach ($elections as $e) { if ($e['status'] === 'ongoing') $liveCount++; }
 
@@ -578,7 +592,7 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--lime);outline-offse
         <?php
             $badgeHtml = '';
             foreach ($candidates as $c) {
-                $photo = !empty($c['photo']) ? $c['photo'] : 'assets/default-avatar.png';
+                $photo = !empty($c['photo']) ? $c['photo'] : 'assets/default-avatar.svg';
                 $badgeHtml .= '<div class="cand-badge"><div class="tab"></div>'
                     . '<img src="' . htmlspecialchars($photo) . '" alt="">'
                     . '<div class="cb-name">' . htmlspecialchars($c['name']) . '</div>'
