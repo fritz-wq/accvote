@@ -60,7 +60,14 @@ function respond(array $payload, int $status = 200): void
 function saveCandidatePhoto(?string $base64): ?string
 {
     if (!$base64) return null;
-    if (strpos($base64, 'data:image/') === 0) return $base64;
+    if (strpos($base64, 'data:image/') === 0) {
+        // Byte-level validation: the decoded payload must actually parse as
+        // a raster image (see isValidImageDataUrl() in functions.php), not
+        // merely carry the right string prefix. Invalid data is dropped
+        // here as a final guard; validatePayload() already rejects it with
+        // a proper error message before this is ever reached.
+        return isValidImageDataUrl($base64) ? $base64 : null;
+    }
     if (strpos($base64, 'assets/') === 0) return $base64; // legacy pre-migration path
     return null;
 }
@@ -81,7 +88,12 @@ function splitElectionType(array $input): array
     return [$type, $department];
 }
 
-function validatePayload(array $input, bool $requirePositions): array
+function validDepartmentCodes(PDO $pdo): array
+{
+    return $pdo->query('SELECT code FROM departments')->fetchAll(PDO::FETCH_COLUMN);
+}
+
+function validatePayload(array $input, bool $requirePositions, array $validDepartmentCodes = []): array
 {
     $errors = [];
     $type = $input['type'] ?? '';
@@ -136,12 +148,24 @@ function validatePayload(array $input, bool $requirePositions): array
                 if (!empty($c['course']) && mb_strlen($c['course']) > 100) {
                     $errors[] = 'Course/major for candidate ' . ($j + 1) . ' in position "' . $label . '" is too long (max 100 characters).';
                 }
+                $candDept = trim((string) ($c['department'] ?? ''));
+                if ($candDept === '') {
+                    $errors[] = 'Candidate ' . ($j + 1) . ' in position "' . $label . '" needs a department.';
+                } elseif (mb_strlen($candDept) > 50) {
+                    $errors[] = 'Department for candidate ' . ($j + 1) . ' in position "' . $label . '" is too long (max 50 characters).';
+                } elseif (!in_array($candDept, $validDepartmentCodes, true)) {
+                    $errors[] = 'Department for candidate ' . ($j + 1) . ' in position "' . $label . '" is not a recognized department.';
+                }
                 if (!empty($c['party']) && mb_strlen($c['party']) > 100) {
                     $errors[] = 'Party for candidate ' . ($j + 1) . ' in position "' . $label . '" is too long (max 100 characters).';
                 }
                 $photo = $c['photo'] ?? '';
-                if ($photo && strpos($photo, 'data:image/') === 0 && base64ApproxBytes($photo) > 2 * 1024 * 1024) {
-                    $errors[] = 'Photo for candidate ' . ($j + 1) . ' in position "' . $label . '" is too large (max 2MB) — please use a smaller image.';
+                if ($photo && strpos($photo, 'data:image/') === 0) {
+                    if (base64ApproxBytes($photo) > 2 * 1024 * 1024) {
+                        $errors[] = 'Photo for candidate ' . ($j + 1) . ' in position "' . $label . '" is too large (max 2MB) — please use a smaller image.';
+                    } elseif (!isValidImageDataUrl($photo)) {
+                        $errors[] = 'Photo for candidate ' . ($j + 1) . ' in position "' . $label . '" is not a valid image file (use PNG, JPEG, GIF, or WebP).';
+                    }
                 }
             }
         }
@@ -176,20 +200,29 @@ function electionVoteCount(PDO $pdo, int $electionId): int
 
 function insertPositionsAndCandidates(PDO $pdo, int $electionId, array $positions, bool $partiesEnabled): void
 {
-    $posInsert = $pdo->prepare('INSERT INTO positions (title) VALUES (:title) RETURNING id');
+    // Postgres returns the new id via RETURNING; MySQL/MariaDB exposes it
+    // through lastInsertId(). Both are safe inside this loop because each
+    // insert is its own statement on the same connection.
+    if (isMysql()) {
+        $posInsert = $pdo->prepare('INSERT INTO positions (title) VALUES (:title)');
+    } else {
+        $posInsert = $pdo->prepare('INSERT INTO positions (title) VALUES (:title) RETURNING id');
+    }
     $epInsert = $pdo->prepare('
         INSERT INTO election_positions (election_id, position_id, winner_count, candidate_limit, year_restriction)
         VALUES (:eid, :pid, :winners, :limit_c, :year)
     ');
     $candInsert = $pdo->prepare('
-        INSERT INTO candidates (position_id, name, photo, course, candidate_year, platform, party)
-        VALUES (:pid, :name, :photo, :course, :year, :platform, :party)
+        INSERT INTO candidates (position_id, name, photo, course, candidate_year, department, platform, party)
+        VALUES (:pid, :name, :photo, :course, :year, :department, :platform, :party)
     ');
 
     foreach ($positions as $posData) {
         $title = trim($posData['title']);
         $posInsert->execute(['title' => $title]);
-        $posId = (int) $posInsert->fetchColumn();
+        $posId = isMysql()
+            ? (int) $pdo->lastInsertId()
+            : (int) $posInsert->fetchColumn();
 
         $candidates = $posData['candidates'] ?? [];
         $yearRestriction = trim($posData['year_restriction'] ?? '');
@@ -210,6 +243,7 @@ function insertPositionsAndCandidates(PDO $pdo, int $electionId, array $position
                 'photo' => $photoPath,
                 'course' => $cand['course'] ?? '',
                 'year' => $cand['candidate_year'] ?? '',
+                'department' => trim($cand['department'] ?? ''),
                 'platform' => $cand['platform'] ?? '',
                 'party' => $partiesEnabled ? ($cand['party'] ?: 'No Party / Independent') : 'No Party / Independent',
             ]);
@@ -243,12 +277,12 @@ if ($method === 'GET') {
         $positions = $posStmt->fetchAll();
 
         $candStmt = $pdo->prepare('
-            SELECT c.id, c.name, c.photo, c.course, c.candidate_year, c.platform, c.party,
+            SELECT c.id, c.name, c.photo, c.course, c.candidate_year, c.department, c.platform, c.party,
                    COUNT(v.id) AS vote_count
             FROM candidates c
             LEFT JOIN votes v ON v.candidate_id = c.id
             WHERE c.position_id = :pid
-            GROUP BY c.id
+            GROUP BY c.id, c.name, c.photo, c.course, c.candidate_year, c.department, c.platform, c.party
             ORDER BY c.name ASC
         ');
         foreach ($positions as &$pos) {
@@ -294,11 +328,21 @@ if (!verifyCsrfToken($input['csrf_token'] ?? null)) {
     respond(['error' => 'Your session expired. Please refresh and try again.'], 403);
 }
 
+// Per-admin rate limit on every write. The cap is deliberately generous —
+// a busy admin wizard fires several requests in quick succession — but it
+// stops a runaway client or compromised session from hammering the
+// database with unbounded writes.
+$adminWriteKey = 'admin_write:admin:' . (int) ($_SESSION['admin_id'] ?? 0);
+if (isRateLimitedKey($pdo, $adminWriteKey, 120, 60)) {
+    respond(['error' => 'Too many requests. Please slow down.'], 429);
+}
+recordAttemptKey($pdo, $adminWriteKey);
+
 // ------------------------------------------------------------------
 // POST: create a brand-new election (always a "full" payload)
 // ------------------------------------------------------------------
 if ($method === 'POST') {
-    $errors = validatePayload($input, true);
+    $errors = validatePayload($input, true, validDepartmentCodes($pdo));
     if ($errors) respond(['error' => implode(' ', $errors)], 400);
 
     [$type, $department] = splitElectionType($input);
@@ -306,12 +350,20 @@ if ($method === 'POST') {
     try {
         $pdo->beginTransaction();
 
-        $stmt = $pdo->prepare('
-            INSERT INTO elections (name, type, department, status, start_date, end_date,
-                                    results_visibility, parties_enabled, parties)
-            VALUES (:name, :type, :department, :status, :start, :end, :visibility, :parties_enabled, :parties::jsonb)
-            RETURNING id
-        ');
+        $partiesJson = json_encode($input['parties'] ?? []);
+        if (isMysql()) {
+            $stmt = $pdo->prepare('
+                INSERT INTO elections (name, type, department, status, start_date, end_date,
+                                        results_visibility, parties_enabled, parties)
+                VALUES (:name, :type, :department, :status, :start, :end, :visibility, :parties_enabled, :parties)
+            ');
+        } else {
+            $stmt = $pdo->prepare('
+                INSERT INTO elections (name, type, department, status, start_date, end_date,
+                                        results_visibility, parties_enabled, parties)
+                VALUES (:name, :type, :department, :status, :start, :end, :visibility, :parties_enabled, :parties::jsonb)
+            ');
+        }
         $stmt->execute([
             'name' => trim($input['name']),
             'type' => $type,
@@ -329,9 +381,9 @@ if ($method === 'POST') {
             // and Postgres rejects '' as invalid boolean input — 1/0 (which
             // PHP stringifies to '1'/'0') are valid boolean literals instead.
             'parties_enabled' => !empty($input['parties_enabled']) ? 1 : 0,
-            'parties' => json_encode($input['parties'] ?? []),
+            'parties' => $partiesJson,
         ]);
-        $electionId = (int) $stmt->fetchColumn();
+        $electionId = isMysql() ? (int) $pdo->lastInsertId() : (int) $stmt->fetchColumn();
 
         insertPositionsAndCandidates($pdo, $electionId, $input['positions'], !empty($input['parties_enabled']));
 
@@ -426,7 +478,7 @@ if ($method === 'PUT') {
             respond(['error' => 'This election already has votes recorded, so its positions and candidates can\'t be edited anymore. You can still change its schedule, status, or results visibility.'], 409);
         }
 
-        $errors = validatePayload($input, true);
+        $errors = validatePayload($input, true, validDepartmentCodes($pdo));
         if ($errors) respond(['error' => implode(' ', $errors)], 400);
 
         [$type, $department] = splitElectionType($input);
@@ -434,11 +486,12 @@ if ($method === 'PUT') {
         $pdo->beginTransaction();
 
         $statusClause = $current['status'] === 'draft' ? ", status = 'scheduled'" : '';
+        $partiesSql = isMysql() ? 'parties = :parties' : 'parties = :parties::jsonb';
         $pdo->prepare('
             UPDATE elections SET
                 name = :name, type = :type, department = :department,
                 start_date = :start, end_date = :end,
-                results_visibility = :visibility, parties_enabled = :parties_enabled, parties = :parties::jsonb
+                results_visibility = :visibility, parties_enabled = :parties_enabled, ' . $partiesSql . '
                 ' . $statusClause . '
             WHERE id = :id
         ')->execute([
