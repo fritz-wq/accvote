@@ -34,32 +34,37 @@ already includes everything.
 ```
 voting-app/
 ├── config/
-│   └── db.php                  # DB connection (reads DATABASE_URL)
+│   └── db.php                  # DB connection (dual-driver: MySQL local / PostgreSQL via DATABASE_URL)
 ├── includes/
 │   └── functions.php           # Session, CSRF, escaping helpers
 ├── assets/
 │   ├── style.css
-│   └── logo.png                 # placeholder — replace with real school logo
+│   ├── dashboard-app.css
+│   ├── default-avatar.svg      # fallback for candidates without a photo
+│   └── logo.png                # placeholder — replace with real school logo
 ├── admin/
 │   ├── login.php
 │   ├── logout.php
-│   ├── index.php                # router: sends you to dashboard.php or login.php
-│   ├── dashboard.php            # Dashboard / Election / Students / Results / Logs panels
+│   ├── index.php               # router: sends you to dashboard.php or login.php
+│   ├── dashboard.php           # Dashboard / Election / Students / Results / Logs panels
 │   └── api/
-│       ├── elections.php        # election + position + candidate CRUD (JSON)
-│       ├── students.php         # student CRUD (JSON)
-│       └── logs.php             # activity log (JSON)
+│       ├── elections.php       # election + position + candidate CRUD (JSON)
+│       ├── students.php        # student CRUD (JSON)
+│       ├── settings.php        # departments / majors / year levels / logos (JSON)
+│       └── logs.php            # activity log (JSON)
 ├── student/
-│   └── register.php             # student self-activation (sets their password)
+│   └── register.php            # student self-activation (sets their password)
 ├── index.php                    # router: sends you to dashboard.php or landingpage.php
-├── landingpage.php               # public homepage
+├── landingpage.php              # public homepage
 ├── login.php                     # student login
 ├── dashboard.php                 # student dashboard: home / vote / candidates / results
+├── dashboard-data.php            # JSON feed for the dashboard SPA
 ├── vote.php                      # AJAX vote handler
-├── results.php                   # public live results
+├── draft.php                     # "save ballot for later" drafts (JSON)
+├── results.php                   # public live results (fetch-polled, no reload)
 ├── logout.php
-├── schema.sql                    # full schema for a fresh install
-├── migration.sql                 # run this instead if the DB already exists — see above
+├── schema.sql                    # PostgreSQL schema for a fresh install
+├── schema.mysql.sql              # MySQL/MariaDB schema + demo seed data (XAMPP)
 ├── .gitignore
 └── README.md
 ```
@@ -89,6 +94,43 @@ candidates, swap it for real object storage (S3, Cloudinary, etc.) instead.
 ---
 
 ## 3. Local Development
+
+### Option A — XAMPP (Apache + MySQL) — fastest
+
+The app auto-detects its database driver: with no environment variables it
+uses **XAMPP's local MariaDB**, so no PostgreSQL install is needed.
+
+1. Copy (or point your web root at) this folder, e.g.
+   `C:\xampp\htdocs\voting-app2\`.
+2. Start **Apache** and **MySQL** from the XAMPP Control Panel.
+3. Load the MySQL schema + demo data once:
+    ```
+    C:\xampp\mysql\bin\mysql.exe -u root < schema.mysql.sql
+    ```
+4. Open <http://localhost/voting-app2/>.
+
+Demo logins (all seeded by `schema.mysql.sql`):
+
+| Role | Login | Password |
+|---|---|---|
+| Student | `987654321` | `password123` |
+| Student (needs activation) | `20260001` | *(set via register page)* |
+| Admin panel | `admin` | `admin123` |
+
+The seed creates one ongoing SSG election, one upcoming FICT election, and
+one ended CASED election (with tallies), so every screen has real data.
+
+> **Note:** the local `.htaccess` sets `SetEnv DB_DRIVER mysql` so this
+> machine never touches the production Neon database. Comment that line out
+> (and uncomment `DATABASE_URL`) if you want to test against Neon locally.
+
+To wipe and re-seed:
+```
+C:\xampp\mysql\bin\mysql.exe -u root -e "DROP DATABASE voting_app"
+C:\xampp\mysql\bin\mysql.exe -u root < schema.mysql.sql
+```
+
+### Option B — PHP built-in server + PostgreSQL
 
 You'll need PHP 8+ with the `pdo_pgsql` extension, and a local PostgreSQL instance.
 
@@ -231,6 +273,6 @@ UPDATE users SET has_voted = 0;
 - Department names and department→major mappings are hardcoded JS arrays
   in `admin/dashboard.php`, not database tables — fine unless
   non-technical staff need to add a department without editing code.
-- `results.php` auto-refreshes every 15 seconds via a meta tag; swap in
-  `fetch()` + `setInterval` if you want it to update without a full page
-  reload.
+- `results.php` polls itself with `fetch()` every 15 seconds and swaps in
+  fresh markup without a page reload (scroll position survives); polling
+  pauses while the tab is hidden.
