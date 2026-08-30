@@ -54,6 +54,15 @@ if ($method === 'POST') {
         respond(['error' => 'Your session expired. Please refresh and try again.'], 403);
     }
 
+    // Per-admin rate limit (same policy as the other admin APIs). This
+    // endpoint is called after every admin action, so the cap is the same
+    // generous one — it only stops runaway loops.
+    $adminWriteKey = 'admin_write:admin:' . (int) ($_SESSION['admin_id'] ?? 0);
+    if (isRateLimitedKey($pdo, $adminWriteKey, 120, 60)) {
+        respond(['error' => 'Too many requests. Please slow down.'], 429);
+    }
+    recordAttemptKey($pdo, $adminWriteKey);
+
     $action = trim((string) ($input['action'] ?? ''));
     if ($action === '') respond(['error' => 'Missing action text.'], 400);
     if (mb_strlen($action) > 500) $action = mb_substr($action, 0, 500);
