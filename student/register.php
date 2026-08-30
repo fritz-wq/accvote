@@ -32,8 +32,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($studentId === '' || $password === '' || $confirm === '') {
             $error = 'Please fill in all fields.';
-        } elseif (strlen($password) < 6) {
-            $error = 'Password must be at least 6 characters.';
+        } elseif (($policyError = passwordPolicyError($password)) !== null) {
+            $error = $policyError;
         } elseif ($password !== $confirm) {
             $error = 'Passwords do not match.';
         } else {
@@ -184,6 +184,25 @@ $csrfToken = csrfToken();
             text-align: center; color: #d9f99d; font-weight: 600;
             padding: 1rem 0; text-shadow: 0 1px 3px rgba(0,0,0,0.4);
         }
+
+        /* ----- Password strength meter ----- */
+        .pw-meter { margin-top: 0.5rem; }
+        .pw-meter-bar {
+            height: 6px; border-radius: 999px; overflow: hidden;
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .pw-meter-fill {
+            height: 100%; width: 0%; border-radius: 999px;
+            background: #ef4444; transition: width 0.25s ease, background-color 0.25s ease;
+        }
+        .pw-meter-fill.pw-1 { background: #ef4444; }
+        .pw-meter-fill.pw-2 { background: #f59e0b; }
+        .pw-meter-fill.pw-3 { background: #84cc16; }
+        .pw-meter-fill.pw-4 { background: #22c55e; }
+        .pw-meter-label {
+            display: block; margin-top: 0.3rem; font-size: 0.72rem;
+            color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+        }
     </style>
 </head>
 <body>
@@ -210,13 +229,17 @@ $csrfToken = csrfToken();
                 <label for="student_id">Student ID</label>
                 <input type="text" id="student_id" name="student_id" required autofocus autocomplete="username">
 
-                <label for="password">New Password (min. 6 characters)</label>
+                <label for="password">New Password</label>
                 <div class="password-field">
-                    <input type="password" id="password" name="password" required autocomplete="new-password">
+                    <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password">
                     <button type="button" class="toggle-password-btn" data-target="password" aria-label="Show password">
                         <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                         <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a20.3 20.3 0 0 1 5.06-5.94M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a20.3 20.3 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
                     </button>
+                </div>
+                <div class="pw-meter" id="pwMeter" aria-hidden="true">
+                    <div class="pw-meter-bar"><div class="pw-meter-fill" id="pwMeterFill"></div></div>
+                    <span class="pw-meter-label" id="pwMeterLabel">Min. 8 characters with letters &amp; numbers</span>
                 </div>
 
                 <label for="confirm_password">Confirm Password</label>
@@ -247,6 +270,35 @@ $csrfToken = csrfToken();
             this.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
         });
     });
+
+    // Live strength meter — same rules the server enforces (8+ chars,
+    // letters and numbers). Purely advisory; the server re-checks.
+    (function () {
+        const input = document.getElementById('password');
+        const fill = document.getElementById('pwMeterFill');
+        const label = document.getElementById('pwMeterLabel');
+        if (!input || !fill || !label) return;
+
+        input.addEventListener('input', function () {
+            const v = input.value;
+            let score = 0;
+            if (v.length >= 8) score++;
+            if (/[A-Za-z]/.test(v) && /\d/.test(v)) score++;
+            if (v.length >= 12) score++;
+            if (/[^A-Za-z0-9]/.test(v) && v.length >= 8) score++;
+            if (v.length === 0) {
+                fill.style.width = '0%';
+                fill.className = 'pw-meter-fill';
+                label.textContent = 'Min. 8 characters with letters & numbers';
+                return;
+            }
+            const labels = { 1: 'Weak', 2: 'Okay', 3: 'Good', 4: 'Strong' };
+            fill.style.width = (score * 25) + '%';
+            fill.className = 'pw-meter-fill pw-' + Math.max(score, 1);
+            const meetsPolicy = v.length >= 8 && /[A-Za-z]/.test(v) && /\d/.test(v);
+            label.textContent = (labels[Math.max(score, 1)] || 'Weak') + (meetsPolicy ? ' — meets requirements' : ' — needs 8+ characters with letters & numbers');
+        });
+    })();
 </script>
 </body>
 </html>
