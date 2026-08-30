@@ -36,8 +36,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['admin_id'] = $admin['id'];
                 $_SESSION['admin_username'] = $admin['username'];
-                $_SESSION['admin_role'] = $admin['role'];
                 $_SESSION['is_admin'] = true;
+                // admins.role is deliberately NOT copied into the session:
+                // nothing in the codebase checks it, and a stored-but-unused
+                // privilege field invites someone to "gate" on it later
+                // without wiring up real enforcement (audit finding #6).
 
                 // Update last_login
                 $update = $pdo->prepare('UPDATE admins SET last_login = NOW() WHERE id = :id');
