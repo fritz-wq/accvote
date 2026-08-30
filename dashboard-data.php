@@ -102,13 +102,13 @@ foreach ($rawElections as $e) {
         $pid = (int) $p['position_id'];
 
         $candStmt = $pdo->prepare('
-            SELECT c.id, c.name, c.photo, c.party, c.course,
+            SELECT c.id, c.name, c.photo, c.party, c.course, c.department,
                    c.candidate_year AS year_level, c.platform,
                    COUNT(v.id) AS vote_count
             FROM candidates c
             LEFT JOIN votes v ON v.candidate_id = c.id
             WHERE c.position_id = :pid
-            GROUP BY c.id, c.name, c.photo, c.party, c.course, c.candidate_year, c.platform
+            GROUP BY c.id, c.name, c.photo, c.party, c.course, c.department, c.candidate_year, c.platform
             ORDER BY c.name ASC
         ');
         $candStmt->execute(['pid' => $pid]);
