@@ -68,6 +68,17 @@ function checkFieldLengths(array $fields): ?string
     return null;
 }
 
+// Format check for student IDs: 4-20 characters, starting with a letter or
+// digit; letters, digits, and dashes allowed after. Deliberately permissive
+// (the school's exact ID pattern lives in one place here, so tightening it
+// later is a one-line change) — the point is rejecting whitespace/garbage
+// that would break duplicate checks and CSV matching, not policing the
+// exact school format.
+function validateStudentIdFormat(string $studentId): bool
+{
+    return (bool) preg_match('/^[A-Za-z0-9][A-Za-z0-9-]{3,19}$/', $studentId);
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 
 // ---------- GET: list all students ----------
@@ -118,6 +129,13 @@ $body = readJsonBody();
 if (!verifyCsrfToken($body['csrf_token'] ?? null)) {
     respond(['error' => 'Your session expired. Please refresh and try again.'], 403);
 }
+
+// Per-admin rate limit on every write (same policy as the other admin APIs).
+$adminWriteKey = 'admin_write:admin:' . (int) ($_SESSION['admin_id'] ?? 0);
+if (isRateLimitedKey($pdo, $adminWriteKey, 120, 60)) {
+    respond(['error' => 'Too many requests. Please slow down.'], 429);
+}
+recordAttemptKey($pdo, $adminWriteKey);
 
 // ---------- POST: create a new student, OR bulk-import from CSV ----------
 if ($method === 'POST') {
@@ -179,6 +197,10 @@ if ($method === 'POST') {
                 $reason = 'Section too long (max 20 characters).';
             } elseif ($email !== '' && mb_strlen($email) > 100) {
                 $reason = 'Email too long (max 100 characters).';
+            } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $reason = 'Invalid email address.';
+            } elseif (!validateStudentIdFormat($studentId)) {
+                $reason = 'Invalid Student ID format (4-20 characters — letters, numbers, dashes).';
             } elseif (isset($existingIds[$studentId])) {
                 $reason = 'Student ID already registered.';
             } elseif (isset($seenInFile[$studentId])) {
@@ -246,8 +268,14 @@ if ($method === 'POST') {
     if ($lengthError = checkFieldLengths(['student_id' => $studentId, 'fullName' => $name, 'department' => $department, 'major' => $major, 'section' => $section, 'yearLevel' => $yearLevel, 'email' => $email])) {
         respond(['error' => $lengthError], 400);
     }
-    if ($password !== '' && strlen($password) < 6) {
-        respond(['error' => 'Password should be at least 6 characters.'], 400);
+    if (!validateStudentIdFormat($studentId)) {
+        respond(['error' => 'Student ID must be 4-20 characters — letters, numbers, and dashes only.'], 400);
+    }
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        respond(['error' => 'Please enter a valid email address.'], 400);
+    }
+    if ($password !== '' && ($policyError = passwordPolicyError($password)) !== null) {
+        respond(['error' => $policyError], 400);
     }
 
     $check = $pdo->prepare('SELECT id FROM users WHERE student_id = :id');
@@ -342,10 +370,19 @@ if ($method === 'PUT') {
     }
 
     if (isset($body['student_id']) && trim($body['student_id']) !== $current['student_id']) {
+        if (!validateStudentIdFormat(trim($body['student_id']))) {
+            respond(['error' => 'Student ID must be 4-20 characters — letters, numbers, and dashes only.'], 400);
+        }
         $dupCheck = $pdo->prepare('SELECT id FROM users WHERE student_id = :sid AND id != :id');
         $dupCheck->execute(['sid' => trim($body['student_id']), 'id' => $id]);
         if ($dupCheck->fetch()) {
             respond(['error' => 'That Student ID is already registered.'], 409);
+        }
+    }
+    if (array_key_exists('email', $body)) {
+        $email = trim((string) $body['email']);
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            respond(['error' => 'Please enter a valid email address.'], 400);
         }
     }
 
@@ -363,8 +400,8 @@ if ($method === 'PUT') {
 
     if (!empty($body['password'])) {
         $password = (string) $body['password'];
-        if (strlen($password) < 6) {
-            respond(['error' => 'Password should be at least 6 characters.'], 400);
+        if (($policyError = passwordPolicyError($password)) !== null) {
+            respond(['error' => $policyError], 400);
         }
         $fields[] = 'password = :password';
         $values['password'] = password_hash($password, PASSWORD_DEFAULT);
