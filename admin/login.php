@@ -131,24 +131,18 @@ $csrfToken = csrfToken();
         }
         @keyframes cardIn { to { opacity: 1; transform: translateY(0); } }
 
-        .admin-badge {
-            width: 56px;
-            height: 56px;
-            border-radius: 16px;
-            background: linear-gradient(135deg, #a3e635, #65a30d);
-            color: #052e16;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 800;
-            font-size: 1.35rem;
-            box-shadow: 0 8px 20px rgba(132, 204, 22, 0.3);
+        .admin-logo {
+            display: block;
+            width: 96px;
+            height: 96px;
+            object-fit: contain;
             margin: 0 auto 1.1rem;
-            opacity: 0;
-            transform: scale(0.7) rotate(-6deg);
-            animation: badgePop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) 0.08s forwards;
+            animation: logoPop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.05s both;
         }
-        @keyframes badgePop { to { opacity: 1; transform: scale(1) rotate(0); } }
+        @keyframes logoPop {
+            0% { opacity: 0; transform: scale(0.6) rotate(-8deg); }
+            100% { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
 
         .card-title {
             text-align: center;
@@ -306,13 +300,14 @@ $csrfToken = csrfToken();
 
         @media (max-width: 380px) {
             .card { padding: 1.75rem 1.4rem 1.6rem; border-radius: 16px; }
+            .admin-logo { width: 80px; height: 80px; }
         }
     </style>
 </head>
 <body>
 <div class="page-center">
     <div class="card" id="loginCard">
-        <div class="admin-badge">FICT</div>
+        <img src="../assets/logo.png" alt="FICT Logo" class="admin-logo">
         <h2 class="card-title">Election Admin</h2>
         <p class="card-subtitle">Sign in to manage elections, students, and results.</p>
 
