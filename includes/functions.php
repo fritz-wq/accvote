@@ -15,6 +15,53 @@
 // ever outside the Philippines.
 date_default_timezone_set('Asia/Manila');
 
+// ------------------------------------------------------------------
+// Global error handling. display_errors stays OFF so an unexpected
+// exception or parse-level problem can never print a stack trace, file
+// paths, or query context to a visitor; the real error still lands in
+// the server log via log_errors. The exception handler below renders a
+// generic message — JSON for API endpoints (they set their Content-Type
+// before doing work), a plain HTML page for everything else.
+// ------------------------------------------------------------------
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+
+set_exception_handler(function (Throwable $e): void {
+    error_log('Uncaught exception: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+
+    $isJson = false;
+    if (function_exists('headers_list')) {
+        foreach (headers_list() as $header) {
+            if (stripos($header, 'Content-Type: application/json') === 0) {
+                $isJson = true;
+                break;
+            }
+        }
+    }
+
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+
+    if ($isJson) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json');
+        }
+        echo json_encode(['success' => false, 'error' => 'A server error occurred. Please try again later.']);
+    } else {
+        echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            . '<title>Something went wrong</title></head>'
+            . '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;'
+            . 'font-family:system-ui,sans-serif;background:#f7f5ef;color:#0f172a;text-align:center;padding:1.5rem;">'
+            . '<div><h1 style="font-size:1.4rem;margin:0 0 .5rem;">Something went wrong</h1>'
+            . '<p style="color:#5c6b81;margin:0 0 1.25rem;">An unexpected error occurred. Please try again later.</p>'
+            . '<a href="index.php" style="color:#65a30d;font-weight:600;">&larr; Back to home</a></div>'
+            . '</body></html>';
+    }
+    exit;
+});
+
 /**
  * Starts a session with sane, hardened cookie settings.
  * Safe to call multiple times.
@@ -61,6 +108,21 @@ function h(?string $value): string
 }
 
 /**
+ * Returns an asset path with a ?v= cache-buster derived from the file's
+ * last-modified time, e.g. "assets/dashboard-app.css?v=1756108800".
+ * Whenever the file changes, the URL changes, so browsers fetch the new
+ * copy immediately instead of serving a stale cached stylesheet/script
+ * (which is how dark-mode CSS fixes once failed to appear for users).
+ * Falls back to a plain version-less path if the file doesn't exist.
+ */
+function assetV(string $path): string
+{
+    $full = __DIR__ . '/../' . ltrim($path, '/');
+    $mtime = @filemtime($full);
+    return $mtime ? $path . '?v=' . $mtime : $path;
+}
+
+/**
  * Generates (or reuses) a CSRF token stored in the session.
  */
 function csrfToken(): string
@@ -95,13 +157,92 @@ function jsonResponse(array $payload, int $statusCode = 200): void
 
 /**
  * Require admin login. Redirect to admin login page if not authenticated.
+ *
+ * JSON API endpoints (admin/api/*.php) get a 401 JSON body instead of a
+ * redirect: a relative "Location: login.php" sent from /admin/api/ resolves
+ * to /admin/api/login.php, which doesn't exist — the client would follow it
+ * into a confusing 404/405 instead of a clear "not logged in".
  */
 function requireAdminLogin(): void
 {
-    if (empty($_SESSION['admin_id'])) {
-        header('Location: login.php');   // Relative – works from /admin/
+    if (!empty($_SESSION['admin_id'])) {
+        return;
+    }
+
+    if (strpos($_SERVER['SCRIPT_NAME'] ?? '', '/api/') !== false) {
+        http_response_code(401);
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'Not logged in.']);
         exit;
     }
+
+    header('Location: login.php');   // Relative – works from /admin/
+    exit;
+}
+
+/**
+ * Best-effort real client IP for rate limiting.
+ *
+ * Behind Render (or any reverse proxy), REMOTE_ADDR is the proxy's IP, so
+ * every visitor would share one rate-limit bucket. When a validated
+ * X-Forwarded-For chain is present, the first public address wins.
+ *
+ * Caveat: X-Forwarded-For is client-suppliable when there is no proxy, so
+ * only values that parse as PUBLIC IPs are accepted (private/reserved
+ * ranges are skipped). A determined attacker can still rotate spoofed
+ * IPs — this raises the bar for bulk abuse, it is not an identity system.
+ */
+function clientIp(): string
+{
+    $xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+    if ($xff !== '') {
+        foreach (explode(',', $xff) as $candidate) {
+            $candidate = trim($candidate);
+            if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                return $candidate;
+            }
+        }
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+}
+
+/**
+ * Core rate-limit check keyed by an arbitrary identifier string.
+ * Login/registration endpoints call the isRateLimited() wrapper (IP-keyed);
+ * per-user endpoints (voting, drafts, admin writes) call this directly with
+ * a "<bucket>:user:<id>" identifier so one busy IP can't lock everyone out
+ * and one user can't hammer their own bucket past the cap.
+ */
+function isRateLimitedKey(PDO $pdo, string $identifier, int $maxAttempts = 8, int $windowSeconds = 300): bool
+{
+    // Housekeeping: drop attempts old enough that they can never matter
+    // again, so this table doesn't grow forever.
+    if (isMysql()) {
+        $pdo->prepare('DELETE FROM login_attempts WHERE identifier = :id AND attempted_at < NOW() - INTERVAL 1 HOUR')
+            ->execute(['id' => $identifier]);
+    } else {
+        $pdo->prepare("DELETE FROM login_attempts WHERE identifier = :id AND attempted_at < NOW() - INTERVAL '1 hour'")
+            ->execute(['id' => $identifier]);
+    }
+
+    $windowSql = isMysql()
+        ? 'NOW() - INTERVAL :window SECOND'
+        : "NOW() - (:window * INTERVAL '1 second')";
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) FROM login_attempts
+        WHERE identifier = :id AND attempted_at > {$windowSql}
+    ");
+    $stmt->execute(['id' => $identifier, 'window' => $windowSeconds]);
+
+    return (int) $stmt->fetchColumn() >= $maxAttempts;
+}
+
+/**
+ * Records one attempt against an arbitrary identifier (see isRateLimitedKey()).
+ */
+function recordAttemptKey(PDO $pdo, string $identifier): void
+{
+    $pdo->prepare('INSERT INTO login_attempts (identifier) VALUES (:id)')->execute(['id' => $identifier]);
 }
 
 /**
@@ -116,20 +257,7 @@ function requireAdminLogin(): void
  */
 function isRateLimited(PDO $pdo, string $bucket, int $maxAttempts = 8, int $windowSeconds = 300): bool
 {
-    $identifier = $bucket . ':' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-
-    // Housekeeping: drop attempts old enough that they can never matter
-    // again, so this table doesn't grow forever.
-    $pdo->prepare("DELETE FROM login_attempts WHERE identifier = :id AND attempted_at < NOW() - INTERVAL '1 hour'")
-        ->execute(['id' => $identifier]);
-
-    $stmt = $pdo->prepare("
-        SELECT COUNT(*) FROM login_attempts
-        WHERE identifier = :id AND attempted_at > NOW() - (:window * INTERVAL '1 second')
-    ");
-    $stmt->execute(['id' => $identifier, 'window' => $windowSeconds]);
-
-    return (int) $stmt->fetchColumn() >= $maxAttempts;
+    return isRateLimitedKey($pdo, $bucket . ':' . clientIp(), $maxAttempts, $windowSeconds);
 }
 
 /**
@@ -139,8 +267,7 @@ function isRateLimited(PDO $pdo, string $bucket, int $maxAttempts = 8, int $wind
  */
 function recordAttempt(PDO $pdo, string $bucket): void
 {
-    $identifier = $bucket . ':' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-    $pdo->prepare('INSERT INTO login_attempts (identifier) VALUES (:id)')->execute(['id' => $identifier]);
+    recordAttemptKey($pdo, $bucket . ':' . clientIp());
 }
 
 /**
@@ -184,16 +311,23 @@ function recordAttempt(PDO $pdo, string $bucket): void
  */
 function syncElectionStatuses(PDO $pdo): void
 {
+    // "Now" as Manila wall-clock, in each driver's own dialect. Postgres:
+    // NOW() is UTC on the server, so convert the instant to Asia/Manila.
+    // MySQL: UTC_TIMESTAMP() + CONVERT_TZ with a fixed offset needs no tz
+    // tables and always works (MariaDB/MySQL both accept '+00:00' offsets).
+    $nowSql = isMysql()
+        ? "CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+08:00')"
+        : "(NOW() AT TIME ZONE 'Asia/Manila')";
     $pdo->exec("
         UPDATE elections SET status = 'ongoing'
         WHERE status = 'scheduled'
-          AND start_date <= (NOW() AT TIME ZONE 'Asia/Manila')
-          AND end_date > (NOW() AT TIME ZONE 'Asia/Manila')
+          AND start_date <= {$nowSql}
+          AND end_date > {$nowSql}
     ");
     $pdo->exec("
         UPDATE elections SET status = 'closed'
         WHERE status IN ('scheduled', 'ongoing')
-          AND end_date <= (NOW() AT TIME ZONE 'Asia/Manila')
+          AND end_date <= {$nowSql}
     ");
 }
 
@@ -263,4 +397,57 @@ function electionLogoHtml(string $type, ?string $departmentCode, ?string $ssgLog
         return '<img src="' . h($logo) . '" alt="" class="elogo-img">';
     }
     return defaultElectionLogoSvg();
+}
+
+/**
+ * ================================================================
+ * UPLOAD VALIDATION (candidate photos + election/department logos)
+ * ================================================================
+ * Both arrive as base64 data: URLs from the browser. The old check only
+ * trusted the "data:image/..." string prefix, so a crafted payload with
+ * a PNG prefix but arbitrary bytes (SVG/script/HTML) would have been
+ * stored unchecked. This validates the DECODED BYTES: the payload must
+ * actually parse as a raster image (JPEG/PNG/GIF/WebP) via
+ * getimagesize(), with sane dimensions. SVG is deliberately rejected —
+ * it can carry embedded script.
+ */
+function isValidImageDataUrl(string $dataUrl): bool
+{
+    $comma = strpos($dataUrl, ',');
+    if ($comma === false) {
+        return false;
+    }
+    $decoded = base64_decode(substr($dataUrl, $comma + 1), true);
+    if ($decoded === false || strlen($decoded) < 8) {
+        return false;
+    }
+    $info = @getimagesizefromstring($decoded);
+    if (!is_array($info) || empty($info['mime'])) {
+        return false;
+    }
+    if (!in_array($info['mime'], ['image/jpeg', 'image/png', 'image/gif', 'image/webp'], true)) {
+        return false;
+    }
+    $width = (int) ($info[0] ?? 0);
+    $height = (int) ($info[1] ?? 0);
+    if ($width < 1 || $height < 1 || $width > 5000 || $height > 5000) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Server-side password policy shared by student self-registration and the
+ * admin panel's student forms. Returns an error message, or null if the
+ * password passes: 8+ characters with at least one letter and one number.
+ */
+function passwordPolicyError(string $password): ?string
+{
+    if (strlen($password) < 8) {
+        return 'Password must be at least 8 characters long.';
+    }
+    if (!preg_match('/[A-Za-z]/', $password) || !preg_match('/\d/', $password)) {
+        return 'Password must contain both letters and numbers.';
+    }
+    return null;
 }
