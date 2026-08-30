@@ -21,13 +21,24 @@ if (!verifyCsrfToken($_POST['csrf_token'] ?? null)) {
 }
 
 $userId = (int) $_SESSION['user_id'];
+
+// Per-user rate limit. vote.php opens a transaction with SELECT ... FOR
+// UPDATE per call, so an unbounded loop of submissions (stuck client,
+// scripted abuse, double-click storms) would translate directly into DB
+// lock contention. 10 submissions/minute is far above any legitimate
+// ballot — a real ballot is one submission per election.
+$pdo = getDbConnection();
+if (isRateLimitedKey($pdo, 'vote_submit:user:' . $userId, 10, 60)) {
+    jsonResponse(['success' => false, 'message' => 'Too many vote attempts. Please wait a minute and try again.'], 429);
+}
+recordAttemptKey($pdo, 'vote_submit:user:' . $userId);
+
 $electionId = (int) ($_POST['election_id'] ?? 0);
 
 if ($electionId <= 0) {
     jsonResponse(['success' => false, 'message' => 'Missing election.'], 400);
 }
 
-$pdo = getDbConnection();
 syncElectionStatuses($pdo);
 
 try {
