@@ -362,6 +362,7 @@ if ($method === 'POST') {
                 INSERT INTO elections (name, type, department, status, start_date, end_date,
                                         results_visibility, parties_enabled, parties)
                 VALUES (:name, :type, :department, :status, :start, :end, :visibility, :parties_enabled, :parties::jsonb)
+                RETURNING id
             ');
         }
         $stmt->execute([
