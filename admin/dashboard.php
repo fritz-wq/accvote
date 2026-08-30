@@ -71,13 +71,9 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,
     width:248px;background:linear-gradient(180deg,var(--navy) 0%,#0b1220 100%);color:#cbd5e1;display:flex;flex-direction:column;
     position:fixed;top:0;left:0;bottom:0;z-index:1000;transition:transform .3s ease;overflow:hidden;
 }
-.sidebar .logo-area{padding:1.6rem 1.5rem 1.1rem;text-align:center;flex-shrink:0;}
-.sidebar .logo-area .badge{
-    width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,var(--lime),var(--lime-dark));color:#052e16;
-    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;margin:0 auto;
-    box-shadow:0 6px 16px -4px rgba(132,204,22,.5);
-}
-.sidebar .logo-area h2{color:#fff;margin:.7rem 0 0;font-weight:600;font-size:1rem;letter-spacing:-.01em;}
+.sidebar .logo-area{padding:1.75rem 1.5rem 1.25rem;text-align:center;flex-shrink:0;}
+.sidebar .logo-area .badge img{max-width:84px;height:auto;filter:drop-shadow(0 4px 10px rgba(0,0,0,.3));}
+.sidebar .logo-area h2{color:#fff;margin:.75rem 0 0;font-weight:600;font-size:1rem;letter-spacing:-.01em;}
 .sidebar .logo-area .tag{color:#64748b;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;margin-top:.15rem;}
 .sidebar nav{flex:1;overflow-y:auto;padding:.75rem .75rem;}
 .sidebar nav a{
@@ -704,7 +700,7 @@ body,.sidebar,.card,.stat-box,.election-card,.wizard-section,.students-table-wra
 
     <div class="sidebar" id="sidebar">
         <div class="logo-area">
-            <div class="badge">FICT</div>
+            <div class="badge"><img src="../assets/logo.png" alt="Aklan Catholic College logo"></div>
             <h2>Election Admin</h2>
             <div class="tag">Control Panel</div>
         </div>
@@ -1592,8 +1588,8 @@ function blankDraft(){
             {
                 title: '',
                 candidates: [
-                    {name:'', photo:'', course:'', candidate_year:'', platform:'', party:''},
-                    {name:'', photo:'', course:'', candidate_year:'', platform:'', party:''}
+                    {name:'', photo:'', course:'', candidate_year:'', department:'', platform:'', party:''},
+                    {name:'', photo:'', course:'', candidate_year:'', department:'', platform:'', party:''}
                 ],
                 winner_count: 1,
                 year_restriction: ''
@@ -1648,6 +1644,7 @@ async function editElection(id){
                 photo: c.photo,
                 course: c.course,
                 candidate_year: c.candidate_year,
+                department: c.department,
                 platform: c.platform,
                 party: c.party,
             }));
@@ -1839,8 +1836,8 @@ function setPositionCount(n){
             return {
                 title: '',
                 candidates: [
-                    {name:'', photo:'', course:'', candidate_year:'', platform:'', party:''},
-                    {name:'', photo:'', course:'', candidate_year:'', platform:'', party:''}
+                    {name:'', photo:'', course:'', candidate_year:'', department:'', platform:'', party:''},
+                    {name:'', photo:'', course:'', candidate_year:'', department:'', platform:'', party:''}
                 ],
                 winner_count: 1,
                 year_restriction: ''
@@ -1853,7 +1850,7 @@ function updateCandidateCount(posIdx, n){
     n = Math.max(1, parseInt(n) || 1);
     const pos = wizardDraft.positions[posIdx];
     const current = pos.candidates || [];
-    pos.candidates = Array.from({length:n}, (_,i) => current[i] || {name:'', photo:'', course:'', candidate_year:'', platform:'', party:''});
+    pos.candidates = Array.from({length:n}, (_,i) => current[i] || {name:'', photo:'', course:'', candidate_year:'', department:'', platform:'', party:''});
     renderWizard();
 }
 
@@ -1924,6 +1921,14 @@ function wizardStep2HTML(){
                                 ${partyOptions.map(p => `<option value="${escapeHtml(p)}" ${cand.party===p?'selected':''}>${escapeHtml(p)}</option>`).join('')}
                              </select>` :
                             `<input type="text" value="No Party / Independent" disabled>`}
+                    </div>
+                    <div class="form-row">
+                        <label>Department</label>
+                        <select id="cand_department_${key}_${ci}" class="${wizardInvalidFields.has('cand_department_'+key+'_'+ci)?'field-invalid':''}" onchange="wizardDraft.positions[${key}].candidates[${ci}].department=this.value">
+                            <option value="">Select department</option>
+                            ${departmentOptions.map(d => `<option value="${d}" ${cand.department===d?'selected':''}>${d}</option>`).join('')}
+                        </select>
+                        ${wizardInvalidFields.has('cand_department_'+key+'_'+ci) ? '<div class="field-error-msg">Department is required.</div>' : ''}
                     </div>
                     <div class="form-row">
                         <label>Course / Major</label>
@@ -2014,6 +2019,7 @@ function buildElectionPayload(isDraftSave){
                 photo: c.photo,
                 course: c.course,
                 candidate_year: c.candidate_year,
+                department: c.department,
                 platform: c.platform,
                 party: c.party,
             }))
@@ -2056,6 +2062,10 @@ async function finalizeElection(){
             if (!c.name.trim()) {
                 wizardInvalidFields.add(`cand_name_${i}_${j}`);
                 messages.push(`Candidate ${j+1} in position "${p.title}" is missing a name.`);
+            }
+            if (!c.department) {
+                wizardInvalidFields.add(`cand_department_${i}_${j}`);
+                messages.push(`Candidate ${j+1} in position "${p.title}" needs a department.`);
             }
         });
     });
@@ -2753,7 +2763,7 @@ function visibilityButtons(electionId, current){
 function exportResultsCSV(detail){
     const positions = detail.positions || [];
     if (!positions.length) { showToast('No positions to export for this election yet.', 'warning'); return; }
-    const headers = ['Position','Candidate','Party','Votes','Share of Position Votes (%)'];
+    const headers = ['Position','Candidate','Department','Course/Major','Year Level','Party','Votes','Share of Position Votes (%)'];
     const rows = [];
     positions.forEach(pos => {
         const cands = pos.candidates || [];
@@ -2761,7 +2771,7 @@ function exportResultsCSV(detail){
         cands.forEach(c => {
             const votes = c.vote_count || 0;
             const pct = total > 0 ? Math.round((votes/total)*100) : 0;
-            rows.push([pos.title, c.name, c.party || '', votes, pct]);
+            rows.push([pos.title, c.name, c.department || '', c.course || '', c.candidate_year || '', c.party || '', votes, pct]);
         });
     });
     if (!rows.length) { showToast('No candidates to export for this election yet.', 'warning'); return; }
@@ -2830,12 +2840,14 @@ async function renderResults(focusId){
                         cands.forEach(c => {
                             const votes = c.vote_count || 0;
                             const pct = total > 0 ? Math.round((votes/total)*100) : 0;
+                            const candMeta = [c.department, c.course, c.candidate_year].filter(Boolean).join(' · ');
                             html += `
                             <div class="result-row">
                                 <div class="result-header">
                                     <span>${escapeHtml(c.name)} ${c.party && c.party !== 'No Party / Independent' ? `<span class="muted">· ${escapeHtml(c.party)}</span>` : ''}</span>
                                     <span>${votes} vote${votes===1?'':'s'} (${pct}%)</span>
                                 </div>
+                                ${candMeta ? `<div class="muted" style="font-size:.76rem;margin-top:.1rem;">${escapeHtml(candMeta)}</div>` : ''}
                                 <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
                             </div>`;
                         });
