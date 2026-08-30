@@ -61,8 +61,11 @@ function base64ApproxBytes(string $base64): int
     return (int) (strlen($encoded) * 3 / 4);
 }
 
-// Validates an uploaded logo image: must be a real data:image/ URL, capped
-// at 2MB (matches the candidate-photo cap in admin/api/elections.php).
+// Validates an uploaded logo image: must be a real data:image/ URL whose
+// DECODED BYTES actually parse as a raster image (PNG/JPEG/GIF/WebP — see
+// isValidImageDataUrl() in functions.php; SVG and anything else is
+// rejected), capped at 2MB (matches the candidate-photo cap in
+// admin/api/elections.php).
 // Returns an error string, or null if the image is fine (or empty/absent,
 // which is valid — it means "clear the logo").
 function validateLogoUpload(?string $value): ?string
@@ -75,6 +78,9 @@ function validateLogoUpload(?string $value): ?string
     }
     if (base64ApproxBytes($value) > 2 * 1024 * 1024) {
         return 'Logo is too large (max 2MB) — please use a smaller image.';
+    }
+    if (!isValidImageDataUrl($value)) {
+        return 'That file is not a valid image (use PNG, JPEG, GIF, or WebP).';
     }
     return null;
 }
@@ -104,6 +110,13 @@ if (!is_array($body)) {
 if (!verifyCsrfToken($body['csrf_token'] ?? null)) {
     respond(['error' => 'Your session expired. Please refresh and try again.'], 403);
 }
+
+// Per-admin rate limit on every write (same policy as the other admin APIs).
+$adminWriteKey = 'admin_write:admin:' . (int) ($_SESSION['admin_id'] ?? 0);
+if (isRateLimitedKey($pdo, $adminWriteKey, 120, 60)) {
+    respond(['error' => 'Too many requests. Please slow down.'], 429);
+}
+recordAttemptKey($pdo, $adminWriteKey);
 
 $type = $body['type'] ?? '';
 if (!in_array($type, ['department', 'major', 'year_level', 'department_logo', 'site_setting'], true)) {
@@ -278,11 +291,19 @@ if ($method === 'PUT') {
         }
         $value = $valueInput ?: null;
 
-        $pdo->prepare('
-            INSERT INTO site_settings (setting_key, setting_value, updated_at)
-            VALUES (:k, :v, NOW())
-            ON CONFLICT (setting_key) DO UPDATE SET setting_value = :v2, updated_at = NOW()
-        ')->execute(['k' => $key, 'v' => $value, 'v2' => $value]);
+        if (isMysql()) {
+            $pdo->prepare('
+                INSERT INTO site_settings (setting_key, setting_value, updated_at)
+                VALUES (:k, :v, NOW())
+                ON DUPLICATE KEY UPDATE setting_value = :v2, updated_at = NOW()
+            ')->execute(['k' => $key, 'v' => $value, 'v2' => $value]);
+        } else {
+            $pdo->prepare('
+                INSERT INTO site_settings (setting_key, setting_value, updated_at)
+                VALUES (:k, :v, NOW())
+                ON CONFLICT (setting_key) DO UPDATE SET setting_value = :v2, updated_at = NOW()
+            ')->execute(['k' => $key, 'v' => $value, 'v2' => $value]);
+        }
         respond(['success' => true]);
     }
 
