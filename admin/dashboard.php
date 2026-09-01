@@ -691,6 +691,12 @@ body,.sidebar,.card,.stat-box,.election-card,.wizard-section,.students-table-wra
     document.documentElement.setAttribute('data-theme', theme);
 })();
 </script>
+<!-- SheetJS — reads real .xlsx/.xls files client-side for the student
+     bulk-import feature, so an admin who downloads the CSV template,
+     edits it in Excel, and hits Save (which often silently re-saves as
+     .xlsx instead of staying .csv) doesn't hit a confusing "missing
+     columns" error from the importer trying to read binary data as text. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -2192,6 +2198,26 @@ function parseCSV(text){
     return rows.filter(r => !(r.length === 1 && r[0] === ''));
 }
 
+// Reads a real .xlsx/.xls workbook (via SheetJS, loaded in <head>) and
+// returns the same "array of row-arrays" shape parseCSV() produces, so
+// rowsToStudentRecords() below doesn't need to know or care which format
+// the file actually was. Only the first sheet is read — a student roster
+// is expected to be a single flat table, not a multi-tab workbook.
+function parseXLSX(arrayBuffer){
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    // raw:false formats values as displayed text (so a date cell becomes
+    // "8/12/2026" instead of an Excel serial number); defval:'' fills in
+    // any blank/omitted cells instead of leaving them undefined, so every
+    // row array lines up with the header row even if trailing cells were
+    // left empty in the spreadsheet.
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    return rows
+        .map(row => row.map(cell => String(cell ?? '').trim()))
+        .filter(r => !(r.length === 1 && r[0] === '') && r.length > 0);
+}
+
 function rowsToStudentRecords(csvRows){
     if (!csvRows.length) return { records: [], error: 'The file is empty.' };
     const headers = csvRows[0].map(h => h.trim().toLowerCase());
@@ -2236,8 +2262,25 @@ async function handleStudentImportFile(evt){
     evt.target.value = ''; // so selecting the same file again still fires 'change'
     if (!file) return;
 
-    const text = await file.text();
-    const csvRows = parseCSV(text);
+    const isExcel = /\.xlsx?$/i.test(file.name);
+    let csvRows;
+    try {
+        if (isExcel) {
+            if (typeof XLSX === 'undefined') {
+                showToast('Could not load the Excel reader — check your internet connection and try again.', 'error');
+                return;
+            }
+            const buffer = await file.arrayBuffer();
+            csvRows = parseXLSX(buffer);
+        } else {
+            const text = await file.text();
+            csvRows = parseCSV(text);
+        }
+    } catch (e) {
+        showToast(`Could not read that file — make sure it's a valid ${isExcel ? 'Excel (.xlsx)' : 'CSV'} file.`, 'error');
+        return;
+    }
+
     const { records, error } = rowsToStudentRecords(csvRows);
     if (error) { showToast(error, 'error'); return; }
     if (!records.length) { showToast('No student rows found in that file.', 'warning'); return; }
@@ -2420,9 +2463,9 @@ async function renderStudentList(forceRefresh = false){
                 <div class="panel-flex-header">
                     <h2 class="section-title" style="margin:0;">Registered Students</h2>
                     <div style="display:flex;gap:.6rem;flex-wrap:wrap;">
-                        <input type="file" id="studentImportFileInput" accept=".csv,text/csv" style="display:none;" onchange="handleStudentImportFile(event)">
+                        <input type="file" id="studentImportFileInput" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;" onchange="handleStudentImportFile(event)">
                         <button class="btn btn-secondary" onclick="downloadStudentImportTemplate()" title="Download a blank CSV with the expected columns">Template</button>
-                        <button class="btn btn-secondary" onclick="triggerStudentImport()" title="Bulk-register students from a CSV file">⬆ Import CSV</button>
+                        <button class="btn btn-secondary" onclick="triggerStudentImport()" title="Bulk-register students from a CSV or Excel file">⬆ Import CSV/Excel</button>
                         <button class="btn btn-secondary" onclick="exportStudentsCSV(lastFilteredStudents)" title="Export the currently filtered list to CSV">⬇ Export CSV</button>
                         <button class="btn btn-primary" onclick="openRegisterStudent()">+ Register Student</button>
                     </div>
