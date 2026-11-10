@@ -528,7 +528,7 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--lime);outline-offse
         </a>
         <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks"><span class="hamburger"><span></span></span></button>
         <div class="nav-links" id="navLinks">
-            <a href="#elections">Elections</a>
+            <a href="#home">Home</a>
             <?php if ($isLoggedIn): ?>
                 <a href="../student/dashboard.php" class="solid">Dashboard</a>
                 <a href="../student/logout.php" class="pill">Log Out</a>
